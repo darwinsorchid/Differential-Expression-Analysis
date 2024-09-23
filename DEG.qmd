@@ -1,0 +1,1008 @@
+---
+title: "Differential Expression Analysis"
+title-block-banner: true
+title-block-banner-color: "#6ba7b5"
+
+toc: true
+toc-title: "Contents"
+toc-location: left
+toc-depth: 4
+number-sections: true
+
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-tools:
+      source: https://github.com/darwinsorchid
+    css: custom.css
+
+editor: visual
+bibliography: references.bib
+---
+
+## Introduction
+
+**Differential Gene Expression (DGE)** refers to the process of identifying and quantifying changes in gene expression levels between different biological conditions, such as healthy vs diseased states, treated vs untreated samples, different developmental stages or distinct cell types. Understanding DGE is fundamental in fields like molecular biology, genetics, and biomedical research, as it provides insights into how genes contribute to various biological processes and phenotypes.
+
+**Tumor Necrosis Factor (TNF)** is a pro-inflammatory cytokine, crucial for the regulation of the immune system's healthy inflammatory reactions. However, when in overproduction or dysregulation, TNF can contribute to chronic inflammation implicated in various autoimmune and inflammatory diseases, hence the now widespread use of anti-TNF drugs to treat such conditions, also known as TNF inhibitors [@monaco2014]. Despite the success of anti-TNF agents in treating chronic pathological inflammatory reactions, little is known about their impact on the affected tissues at the transcriptome level. As an endeavor to discover the effects of such drugs on the expression levels of different genes, Karagianni and colleagues applied four different anti-TNF drugs on an established mouse model of inflammatory polyarthritis and collected a large number of independent biological replicates from the synovial tissue of healthy, diseased and treated animals [@karagianni2019]. The dataset that pertains to these experiments is used in this workflow, which is part of the study's computational analyses for identifying and clustering differentially expressed genes. Expression levels were detected and quantified with DNA microarrays, where detected fluorescence indicates the expression of a specific gene against a reference sample.
+
+## Exploratory Data Analysis
+
+**Exploratory Data Analysis (EDA)** is a critical process in data science and statistics that involves analyzing and summarizing the main characteristics of a dataset, often using visual methods. The goal of EDA is to uncover patterns, spot anomalies, test hypotheses, and check assumptions with the help of summary statistics and graphical representations [@morgenthaler2009].
+
+```{r setup}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+options(warn = -1)
+
+suppressPackageStartupMessages({
+  library(preprocessCore)
+  library(umap)
+  library(ggplot2)
+  library(multcomp)
+  library(gplots)
+  library(factoextra)
+  library(dplyr)
+  library(kableExtra)
+  library(gprofiler2)
+  library(randomForest)
+  library(caret)
+  library(cowplot)
+  library(RColorBrewer)
+  library(plotly)
+})
+```
+
+```{r}
+# Read file
+data = read.delim(file = "Raw_common18704genes_antiTNF.tsv",
+                  header = T, 
+                  row.names = 1,
+                  sep = "\t")
+
+# Keep gene and sample names
+Gene = rownames(data)
+Sample = colnames(data)
+```
+
+```{r}
+#| label: fig-boxplot1
+#| fig-cap: "Boxplot of data before quantile normalization"
+
+boxplot(data, horizontal = T, las = 1, cex.axis = 0.5)
+
+```
+
+```{r head_of_data}
+# Show head of dataframe
+kable(head(data)) |>
+  kable_styling(bootstrap_options = c("striped")) |>
+  scroll_box(width = "100%", height = "100%") |>
+  kable_classic()
+```
+
+## Check for missing values
+
+If there are any missing values, we will need to decide how to handle them, probably by removing the respective genes.
+
+```{r}
+# Check genes_data for missing values
+colSums(is.na(data))
+```
+
+## Data Distribution
+
+**Data distribution** refers to how data values are spread or dispersed across a range of possible values. Understanding the distribution of the data is a key part of Exploratory Data Analysis (EDA), as it gives insights into the central tendency, variability, and shape of the dataset. It can help in detecting patterns, outliers, and important characteristics of the data, and also informs which statistical techniques to use. Thus, a detailed assessment of data distribution is a foundational step in unraveling the complexities of any dataset during the EDA process.
+
+[Central Tendency]{.underline}
+
+-   **Mean (Average):** The sum of all values divided by the number of values. It provides a sense of the center of the data.
+
+-   **Median:** The middle value when data is ordered. It’s less affected by extreme values (outliers) and provides a robust measure of the center.
+
+-   **Mode:** The most frequent value in the data. For categorical data, this is often the only measure of central tendency.
+
+[Spread (Dispersion)]{.underline}
+
+-   **Range:** The difference between the maximum and minimum values.
+
+-   **Variance:** The average of the squared differences from the mean. It quantifies how much the data points deviate from the mean.
+
+-   **Standard Deviation:** The square root of the variance. It provides a more interpretable measure of spread in the same units as the data.
+
+-   **Interquartile Range (IQR):** The range within the middle 50% of the data (between the first and third quartiles). It’s a robust measure of spread that isn’t affected by outliers.
+
+```{r}
+#| label: fig-distribution1
+#| fig-cap: "Data distribution before quantile normalization"
+
+# Adjust the layout and margins
+par(mfrow = c(8, 9), mar = c(1, 1, 2.5, 1))
+
+for (col in colnames(data)) {
+  plot(density(data[[col]]), 
+       main = col,
+       xlab = col, col = "#009AEF", lwd = 2)
+}
+```
+
+```{r distribution_summary}
+data %>% 
+  select_if(is.numeric) %>%
+  apply(2, function(x) round(summary(x), 3)) %>% 
+  kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "bordered")) %>% 
+  kable_classic() %>%
+  scroll_box(width = "100%", height = "100%")
+```
+
+```{r data_stats}
+calculate_metrics = function(data.frame) {
+  max <- apply(data.frame, 2, max)
+  min <- apply(data.frame, 2, min)
+  mean <- (max + min) / 2
+
+  dt_matrix = data.frame(name = colnames(data.frame),
+                         min = as.numeric(as.character(min)),
+                         max = as.numeric(as.character(max)),
+                         mean = as.numeric(as.character(mean)))
+  return(dt_matrix)
+}
+
+# Calculate metrics for each condition
+c_metrics = calculate_metrics(data)
+c_metrics
+```
+
+## Data Normalization
+
+The primary goal of quantile normalization is to align the statistical distributions of all samples so that they are the same. This technique assumes that all samples should have the same overall distribution of values (e.g., gene expression levels), meaning that any differences between samples that aren't due to biological variation are artifacts that need to be corrected.
+
+[**Steps of Quantile Normalization**]{.underline}
+
+-   **Sort the Data:**
+
+    For each sample (e.g., each column in a matrix of gene expression data), the data is sorted / ranked in ascending order.
+
+-   **Average the Sorted Values:**
+
+    Across all samples, for each rank, the values are averaged. This creates a "reference" distribution, where each rank corresponds to the average value of that rank across all samples.
+
+-   **Replace Original Values:**
+
+    Each value in the original dataset is replaced by the corresponding value from the reference distribution.
+
+-   **Output the Normalized Data:**
+
+    The result is a new dataset where each sample has the same distribution of values, which helps remove any technical variations between samples.
+
+```{r data_normalization}
+# Convert dataframe to matrix
+data = as.matrix(data)
+
+# Normalize data
+data = normalize.quantiles(data , copy=TRUE)
+
+# Convert matrix to dataframe
+data = data.frame(data)
+
+# Add column names to dataframe
+colnames(data) = Sample
+
+# Add row names to dataframe
+rownames(data) = Gene
+```
+
+```{r}
+#| label: fig-boxplot2
+#| fig-cap: "Boxplot of data after quantile normalization"
+
+boxplot(data, horizontal = T, las = 1, cex.axis = 0.5)
+```
+
+```{r}
+#| label: fig-distribution2
+#| fig-cap: "Data distribution after quantile normalization"
+
+# Adjust the layout and margins 
+par(mfrow = c(8, 9), mar = c(1, 1, 2.5, 1))
+
+for (col in colnames(data)) {
+  plot(density(data[[col]]), 
+       main = col,
+       xlab = col, col = "#009AEF", lwd = 2)
+}
+
+```
+
+## Dimension Reduction Algorithms
+
+### Uniform Manifold Approximation and Projection (UMAP)
+
+UMAP (Uniform Manifold Approximation and Projection) is a dimensionality reduction algorithm that is widely used in data science and machine learning. It is designed to help visualize high-dimensional data in a lower-dimensional space, typically 2D or 3D, while preserving the global and local structure of the data as much as possible.
+
+[**Key concepts of UMAP**]{.underline}
+
+1.  **Manifold Learning**: UMAP is based on the idea that high-dimensional data often lies on a lower-dimensional manifold, a geometry concept. UMAP aims to learn this manifold and then project the data onto a lower-dimensional space that best represents the structure of the data.
+
+2.  **Topology**: UMAP uses topological techniques to understand the shape of the data. It constructs a graph that represents the relationships between data points based on their proximity. This graph is then used to project the data into a lower-dimensional space.
+
+3.  **Optimization**: The final embedding is obtained by optimizing a cost function that balances the preservation of local structures (how points are grouped) and global structures (the overall layout).
+
+[**Applications**]{.underline}
+
+1.  **Visualization**: UMAP is often used to visualize complex datasets, such as in biology (e.g., gene expression data), where it helps to identify patterns and clusters.
+
+2.  **Preprocessing**: It can be used as a preprocessing step before other machine learning algorithms, such as clustering or classification, to reduce dimensionality while maintaining the integrity of the data structure.
+
+3.  **Data Exploration**: UMAP is useful for exploring and understanding large datasets, making it easier to identify trends, outliers, and relationships within the data.
+
+[**Comparison to other techniques**]{.underline}
+
+-   **t-SNE**: UMAP is similar to t-SNE, another popular dimensionality reduction technique. However, UMAP is generally faster and better at preserving both global and local structures, making it more effective for large datasets.
+
+-   **PCA (Principal Component Analysis)**: PCA is another common method for dimensionality reduction but focuses on preserving linear relationships, which may not capture the complexity of data as effectively as UMAP, especially in cases of non-linear structures.
+
+```{r umap_prep}
+
+# Keep only WT and TG samples
+wt_tg_df = data[, 1:23]
+
+# After dataframe transposition columns must represent genes
+wt_tg_df = t(wt_tg_df)
+```
+
+```{r}
+#| label: fig-plotumap
+#| fig-cap: "UMAP plot"
+
+# UMAP dimension reduction for wt and tg samples
+wt_tg_df.umap <- umap(wt_tg_df, n_components=2, random_state=15)
+
+# Keep the numeric dimensions
+wt_tg_df.umap <- wt_tg_df.umap[["layout"]]
+
+# Create vector with groups
+group = c(rep("A_Wt", 10), rep("B_Tg", 13))
+
+# Create final dataframe with dimensions and group for plotting
+wt_tg_df.umap <- cbind(wt_tg_df.umap, group)
+wt_tg_df.umap <- data.frame(wt_tg_df.umap)
+
+# Plot UMAP results
+ggplotly(
+  ggplot(wt_tg_df.umap, aes(x = V1, y = V2, color = group)) +
+    geom_point() +
+    labs(
+      x = "UMAP1",
+      y = "UMAP2",
+      title = "UMAP plot",
+      subtitle = "A UMAP Visualization of WT and TG samples") +
+    theme(
+      axis.text.x = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank()
+    )
+)
+```
+
+### Principal Component Analysis (PCA)
+
+Principal Component Analysis (PCA) is a statistical technique used to simplify complex datasets by reducing their dimensionality while preserving as much variance as possible. The main idea behind PCA is to transform the original data into a new coordinate system where the greatest variance in the data is captured in the first few dimensions (called principal components). Here’s how PCA works step-by-step:
+
+[**Covariance Matrix Computation**]{.underline}
+
+-   Calculate the covariance matrix of the data. The covariance matrix is a square matrix that shows the covariance between different features. If there are $n$ features, the covariance matrix will be of size $n×n$. Covariance gives an idea of how much two features vary together.
+
+[**Eigenvalue and Eigenvector Calculation**]{.underline}
+
+-   Compute the eigenvalues and eigenvectors of the covariance matrix.
+-   **Eigenvectors** represent the directions of the new feature space, and **eigenvalues** tell us how much variance is along each of these directions.
+-   The eigenvector with the highest eigenvalue is the first principal component, which captures the most variance in the data. The second principal component is orthogonal to the first and captures the second most variance, and so on.
+
+[**Sort Eigenvectors**]{.underline}
+
+-   Sort the eigenvectors by their corresponding eigenvalues in descending order. This ordering helps in deciding which principal components to keep. The components corresponding to the largest eigenvalues capture the most significant structure in the data.
+
+[**Dimensionality Reduction**]{.underline}
+
+-   Choose the top $k$ eigenvectors (where $k$ is the number of dimensions you want to reduce your data to) and project the original data onto these eigenvectors. This transformation gives you the data represented in terms of the principal components, reducing the dimensionality from $n$ to $k$.
+
+```{=html}
+<!-- -->
+```
+-   The resulting $k$-dimensional space retains most of the variability in the original $n$-dimensional space.
+
+[**Projection of data**]{.underline}
+
+-   Finally, the original data is transformed into the new feature space defined by the selected principal components. This projection is done by multiplying the original data matrix by the matrix of eigenvectors.
+
+[**Applications**]{.underline}
+
+-   **Data compression**: Reducing the number of features while retaining most of the original information.
+
+-   **Noise reduction**: By keeping the most significant components, noise in the data (which might be in less significant components) can be reduced.
+
+-   **Visualization**: Reducing data to 2 or 3 dimensions makes it easier to visualize, especially in high-dimensional datasets.
+
+-   **Preprocessing**: Used as a preprocessing step before applying machine learning algorithms to improve performance and reduce computational cost.
+
+```{r pca_summary}
+
+# PCA dimension reduction
+wt_tg_df.pca <- prcomp(wt_tg_df, scale. = FALSE)
+summary(wt_tg_df.pca)
+```
+
+```{r}
+#| label: fig-componentplots
+#| fig-cap: "Plot PCA results"
+
+plot_grid(fviz_pca_ind(wt_tg_df.pca, repel = TRUE, # Avoid text overlapping
+                  habillage = group,
+                  label = "none",
+                  axes = c(1, 2), # choose PCs to plot
+                  addEllipses = TRUE,
+                  ellipse.level = 0.95,
+                  title = "Biplot: PC1 vs PC2") +
+                  scale_color_manual(values = c('#33cc00','#009AEF95')) +
+                  scale_fill_manual(values = c('#33cc00','#009AEF95')),
+          fviz_pca_ind(wt_tg_df.pca, repel = TRUE, # Avoid text overlapping
+                  habillage = group,
+                  label = "none",
+                  axes = c(1, 3), # choose PCs to plot
+                  addEllipses = TRUE,
+                  ellipse.level = 0.95,
+                  title = "Biplot: PC1 vs PC3") + 
+                  scale_color_manual(values = c('#33cc00','#009AEF95')) +
+                  scale_fill_manual(values = c('#33cc00','#009AEF95')),
+          fviz_pca_ind(wt_tg_df.pca, repel = TRUE, # Avoid text overlapping
+                  habillage = group,
+                  label = "none",
+                  axes = c(2, 3), # choose PCs to plot
+                  addEllipses = TRUE,
+                  ellipse.level = 0.95,
+                  title = "Biplot: PC2 vs PC3") +
+                  scale_color_manual(values = c('#33cc00','#009AEF95')) +
+                  scale_fill_manual(values = c('#33cc00','#009AEF95')),
+          
+          # Visualize eigenvalues/variances
+          fviz_screeplot(wt_tg_df.pca, 
+                    addlabels = TRUE,
+                    title = "Principal Components Contribution",
+                    ylim = c(0, 65), 
+                    barcolor = "#009AEF95",  
+                    barfill = "#009AEF95"),
+          
+          # Contributions of features to PC1
+          fviz_contrib(wt_tg_df.pca, 
+                  choice = "var", 
+                  axes = 1, 
+                  top = 14, 
+                  color = "#009AEF95", 
+                  fill = "#009AEF95"),
+          
+          # Contributions of features to PC2
+          fviz_contrib(wt_tg_df.pca, 
+                  choice = "var", 
+                  axes = 2, 
+                  top = 14, 
+                  color = "#009AEF95", 
+                  fill = "#009AEF95"),
+          labels = c("A", "B", "C", "D", "E", "F")
+)
+
+```
+
+```{r}
+#| label: fig-pcaplot
+#| fig-cap: "Plot two first components of PCA"
+
+wt_tg_df.pca <- data.frame("PC1" = wt_tg_df.pca$x[,1], 
+                           "PC2" = wt_tg_df.pca$x[,2], 
+                           "group" = group)
+
+# Plot PCA results
+
+# insert dataframe [1] , variables [2]-[3] and color groyp [4]
+ggplotly(
+  ggplot( wt_tg_df.pca, aes(x= PC1 , y= PC2 , color= group ))+
+    
+    # try "geom_point" or "geom_line"
+    geom_point()+
+    
+    # try "ggtitle" or "ggname"
+    ggtitle("Two First Components of PCA") +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank())
+)
+```
+
+## Statistical Analysis
+
+### Group treatments in dataframe
+
+ANOVA, or **Analysis of Variance**, is a statistical method used to compare means among three or more groups to determine if there are any statistically significant differences between them. It extends the t-test, which is typically used to compare the means of two groups, to situations where more than two groups are involved. ANOVA allows for the simultaneous assessment of variations within and between groups, enabling the identification of genes with expression patterns that are significantly different across experimental conditions. It is particularly useful in experiments where multiple groups or conditions are being tested simultaneously.
+
+[**Hypotheses in ANOVA**]{.underline}
+
+ANOVA tests the following hypotheses:
+
+-   **Null Hypothesis (H₀):** All group means are equal. (No significant difference between groups)
+
+-   **Alternative Hypothesis (H₁):** At least one group mean is different from the others. (There is a significant difference between groups)
+
+[**Partitioning Variance**]{.underline}
+
+ANOVA works by partitioning the total variance observed in the data into two components:
+
+1.  **Between-Group Variance:** The variation due to the interaction between the different groups. This measures how much the group means differ from the overall mean.
+
+2.  **Within-Group Variance (Error Variance):** The variation within each group. This measures how much individual observations differ from their group mean.
+
+Mathematically, the total variance is expressed as:
+
+\$\$ \\text{Total Variance} = \\text{Between-Group Variance} + \\text{Within-Group Variance} \$\$
+
+[**F-Ratio Calculation**]{.underline}
+
+ANOVA calculates an **F-ratio** by comparing the between-group variance to the within-group variance:
+
+$$ F = \frac{\text{Between-Group Variance}}{\text{Within-Group Variance}} $$
+
+-   A large F-ratio indicates that the between-group variance is large relative to the within-group variance, suggesting that the group means are significantly different.
+
+-   A small F-ratio suggests that any observed differences in means are more likely due to random chance.
+
+[**ANOVA table**]{.underline}
+
+The results of ANOVA are typically summarized in an ANOVA table, which includes:
+
+-   **Sum of Squares (SS):** Measures of variation for both between-group and within-group components.
+
+-   **Degrees of Freedom (df):** The number of values that are free to vary for each component.
+
+-   **Mean Squares (MS):** Calculated by dividing the sum of squares by the corresponding degrees of freedom.
+
+-   **F-Statistic (F):** The ratio of mean squares between groups to mean squares within groups.
+
+[**Assumptions of ANOVA**]{.underline}
+
+For the results of ANOVA to be valid, several assumptions need to be met:
+
+1.  **Independence:** The observations within each group and between groups should be independent of each other.
+
+2.  **Normality:** The data in each group should be approximately normally distributed.
+
+3.  **Homogeneity of Variances:** The variances among the groups should be approximately equal.
+
+```{r anova}
+# -------------------Apply ANOVA on all genes----------------------
+
+# Create Matrix by Excluding rownames and colnames
+matrixdata = as.matrix(data)
+
+# Create Groups
+group = factor(c(
+  rep("A_Wt", 10),
+  rep("B_Tg", 13),
+  rep("C_Proph_Ther_Rem", 3),
+  rep("D_Ther_Rem", 10),
+  rep("E_Ther_Hum", 10),
+  rep("F_Ther_Enb", 10),
+  rep("G_Ther_Cim", 10)
+))
+
+
+# Create empty dataframe
+anova_table = data.frame()
+
+# Recursive parse all genes
+for( i in 1:length( matrixdata[ , 1 ] ) ) {
+  
+  # Create dataframe for each gene
+  df = data.frame("gene_expression" = matrixdata[ i , ], 
+                  "group" = group)
+  
+  # Apply ANOVA for gene i
+  gene_aov = aov( gene_expression ~ group , data = df)
+  
+  # Apply tukey's post-hoc test on ANOVA results
+  tukey = TukeyHSD( gene_aov , conf.level = 0.99)
+  
+  # Vector calling Tukey's values
+  tukey_data = c(tukey$group["B_Tg-A_Wt", 1],
+                 tukey$group["B_Tg-A_Wt", 4],
+                 tukey$group["C_Proph_Ther_Rem-A_Wt", 1],
+                 tukey$group["C_Proph_Ther_Rem-A_Wt", 4],
+                 tukey$group["D_Ther_Rem-A_Wt", 1],
+                 tukey$group["D_Ther_Rem-A_Wt", 4],
+                 tukey$group["E_Ther_Hum-A_Wt", 1],
+                 tukey$group["E_Ther_Hum-A_Wt", 4],
+                 tukey$group["F_Ther_Enb-A_Wt", 1],
+                 tukey$group["F_Ther_Enb-A_Wt", 4],
+                 tukey$group["G_Ther_Cim-A_Wt", 1],
+                 tukey$group["G_Ther_Cim-A_Wt", 4],
+                 
+                 tukey$group["C_Proph_Ther_Rem-B_Tg", 1],
+                 tukey$group["C_Proph_Ther_Rem-B_Tg", 4],
+                 tukey$group["D_Ther_Rem-B_Tg", 1],
+                 tukey$group["D_Ther_Rem-B_Tg", 4],
+                 tukey$group["E_Ther_Hum-B_Tg", 1],
+                 tukey$group["E_Ther_Hum-B_Tg", 4],
+                 tukey$group["F_Ther_Enb-B_Tg", 1],
+                 tukey$group["F_Ther_Enb-B_Tg", 4],
+                 tukey$group["G_Ther_Cim-B_Tg", 1],
+                 tukey$group["G_Ther_Cim-B_Tg", 4])
+  
+  # Append Tukey's data to dataframe
+  anova_table = rbind( anova_table , tukey_data)
+}
+
+colnames(anova_table) <- c("Wt_Tg_diff", "Wt_Tg_padj",
+                           "Wt_Rem_P_diff", "Wt_Rem_P_padj", 
+                           "Wt_Rem_diff", "Wt_Rem_padj", 
+                           "Wt_Hum_diff", "Wt_Hum_padj", 
+                           "Wt_Enb_diff", "Wt_Enb_padj", 
+                           "Wt_Cim_diff", "Wt_Cim_padj",
+                           
+                           "Tg_Rem_P_diff", "Tg_Rem_P_padj", 
+                           "Tg_Rem_diff", "Tg_Rem_padj", 
+                           "Tg_Hum_diff", "Tg_Hum_padj", 
+                           "Tg_Enb_diff", "Tg_Enb_padj", 
+                           "Tg_Cim_diff", "Tg_Cim_padj")
+
+# Add rownames with gene names
+rownames(anova_table) = Gene
+```
+
+## Volcano Plot
+
+```{r volcano_prep}
+
+# -----------------Volcano plot preparation---------------------
+
+# Create variables for upregulated/downregulated genes and genes with no observed change in expression levels
+upWT = 0
+downWT = 0
+nochangeWT = 0
+
+# Filter Differential Expressed Genes
+upWT = which(anova_table[ , 1 ] < -1.0 & anova_table[ , 2 ] < 0.05)
+
+downWT = which(anova_table[ , 1 ] > 1.0 & anova_table[ , 2 ] < 0.05)
+
+nochangeWT = which(anova_table[ , 2 ] > 0.05 | 
+                  (anova_table[ , 1 ] > -1.0 & anova_table[ , 1 ] < 1.0 ) )
+
+# Create vector to store states for each gene
+state <- vector(mode="character", length=length(anova_table[,1]))
+state[upWT]   <- "up_WT"
+state[downWT] <- "down_WT"
+state[nochangeWT] <- "nochange_WT"
+
+# Identify names of genes differentially expressed between wt and tg
+genes_up_WT   <- c(rownames(anova_table)[upWT])
+genes_down_WT <- c(rownames(anova_table)[downWT])
+
+# Union of DEGs between wt and tg
+deg_wt_tg <- c(genes_up_WT, genes_down_WT)
+
+# Subset dataframe based on specific degs
+deg_wt_tg_df <- subset(data , Gene %in% deg_wt_tg)
+
+## Dataframe for volcano plot
+volcano_data <- data.frame("padj" = anova_table[,2], 
+                           "DisWt" = anova_table[,1], 
+                           state=state)
+```
+
+```{r}
+#| label: fig-volcano
+#| fig-cap: "Volcano plot of differentially expressed genes"
+
+ggplot(volcano_data , aes(x = DisWt , y = -log10(padj) , colour = state )) +
+    
+    geom_point() +
+    
+    labs(x = "mean(Difference)",
+         y = "-log10(p-value)",
+         title = "Volcano Plot",
+         subtitle = "Differentially Expressed Genes (WT vs TG)") +
+    
+    # Insert line to show cutoff
+    geom_vline(xintercept = c( -1 , 1 ),
+               linetype = "dashed",
+               color = "black") +
+    
+    # insert line to show cutoff
+    geom_hline(yintercept = -log10(0.05),
+               linetype = "dashed",
+               color = "black")
+```
+
+### Notes on Volcano Plot Interpretation
+
+A volcano plot is a type of scatter plot commonly used in high-throughput data analysis, particularly in genomics, proteomics, and transcriptomics. It's particularly useful for visualizing the results of differential expression analyses, where you're comparing two conditions to identify genes, proteins, or other features that are significantly differentially expressed.
+
+[**Structure**]{.underline}
+
+-   **X-axis (mean(Difference)):** This represents the magnitude of change between two conditions. A mean change of 0 indicates no change, positive values indicate upregulation (more abundant in the condition being tested), and negative values indicate downregulation (less abundant).
+
+-   **Y-axis (−log10(p-value)):** This axis represents the statistical significance of the observed changes, often using a p-value from a statistical test. The higher the value on this axis, the more significant the change. Since it is a negative log scale, higher values represent smaller p-values.
+
+[**Interpretation**]{.underline}
+
+-   **Significance:** Points located at the top of the plot have high statistical significance. The further a point is from the origin along the y-axis, the more significant the result.
+
+-   **Magnitude:** Points farther to the right (positive mean change) indicate genes/proteins/features that are upregulated, while points farther to the left (negative mean change) indicate downregulation.
+
+-   **Significant Features:** Typically, the most interesting features are those that are both statistically significant (high on the y-axis) and have a large magnitude of change (far left or far right on the x-axis). These appear as points in the upper left or upper right corners of the plot.
+
+-   **Thresholds:** Horizontal and vertical lines are often added to represent thresholds for significance. Points outside these thresholds are often colored differently to highlight significant changes.
+
+## Uniform Manifold Approximation and Projection (UMAP) after identifying Differentially Expresssed Genes
+
+```{r umap_deg}
+
+# Subset dataframe based on specific degs
+deg_wt_tg_df = subset(data , Gene %in% deg_wt_tg)
+
+deg_wt_tg_df = deg_wt_tg_df[,1:23]
+
+# After dataframe transposition columns must represent genes
+deg_wt_tg_df = t(deg_wt_tg_df)
+```
+
+```{r}
+#| label: fig-degumap
+#| fig-cap: "UMAP plot of differentially expressed genes"
+
+# UMAP dimension reduction for wt and tg samples
+deg_wt_tg_df.umap = umap(deg_wt_tg_df, n_components=2, random_state=15)
+
+# Keep the numeric dimensions
+deg_wt_tg_df.umap = deg_wt_tg_df.umap[["layout"]]
+
+# Create vector with groups
+group = c(rep("A_Wt", 10), rep("B_Tg", 13) )
+
+# Create final dataframe with dimensions and group for plotting
+deg_wt_tg_df.umap = cbind(deg_wt_tg_df.umap, group)
+deg_wt_tg_df.umap = data.frame(deg_wt_tg_df.umap)
+
+# Plot UMAP results
+ggplotly(
+  ggplot(deg_wt_tg_df.umap, aes(x = V1, y = V2, color = group)) +
+    geom_point() +
+    labs(x = "UMAP1", y = "UMAP2", 
+         title = "UMAP plot", 
+         subtitle = "A UMAP Visualization of WT and TG samples (DEGs subset)") +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank())
+  )
+```
+
+```{r}
+#| label: fig-degpca
+#| fig-cap: "PCA plot of differentially expresssed genes"
+
+# Group wt and tg as character and not factor
+group = c(rep("A_Wt", 10), rep("B_Tg", 13) )
+
+# Dimension reduction with PCA for wt and tg dataframe
+deg_wt_tg_df.pca = prcomp(deg_wt_tg_df , scale. = FALSE)
+
+deg_wt_tg_df.pca = data.frame("PC1" = deg_wt_tg_df.pca$x[,1] , 
+                              "PC2" = deg_wt_tg_df.pca$x[,2] , 
+                              "group" = group)
+
+# Plot PCA results
+ggplotly(
+  ggplot(deg_wt_tg_df.pca , aes(x=PC1,y=PC2,color=group))+
+    geom_point()+
+    labs(x = "PC1", y = "PC2", 
+         title = "PCA plot", 
+         subtitle = "A PCA Visualization of WT and TG samples (DEGs subset)") +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank())
+)
+```
+
+#### Identify differentially expressed genes between transgenic animals and at least one therapy
+
+```{r}
+
+# Volcano plot dataframe preparation for DEGs from TG vs therapies
+upTHER = 0
+downTHER = 0
+nochangeTHER = 0
+
+# Filter genes based on mean diff and p_value between TG and therapies
+upTHER = which((anova_table[,13] < -1.0 & anova_table[,14] < 0.05) | 
+               (anova_table[,15] < -1.0 & anova_table[,16] < 0.05) | 
+               (anova_table[,17] < -1.0 & anova_table[,18] < 0.05) |
+               (anova_table[,19] < -1.0 & anova_table[,20] < 0.05) |
+               (anova_table[,21] < -1.0 & anova_table[,22] < 0.05) )
+
+downTHER = which((anova_table[,13] > 1.0 & anova_table[,14] < 0.05) | 
+                 (anova_table[,15] > 1.0 & anova_table[,16] < 0.05) | 
+                 (anova_table[,17] > 1.0 & anova_table[,18] < 0.05) |
+                 (anova_table[,19] > 1.0 & anova_table[,20] < 0.05) |
+                 (anova_table[,21] > 1.0 & anova_table[,22] < 0.05) )
+
+nochangeTHER = which( ( (anova_table[,13] > -1.0 & anova_table[,13] < 1.0) |   
+                         anova_table[,14] > 0.05) |
+                  
+                      ( (anova_table[,15] > -1.0 & anova_table[,15] < 1.0) |
+                         anova_table[,16] > 0.05) |
+                        
+                      ( (anova_table[,17] > -1.0 & anova_table[,17] < 1.0) |
+                         anova_table[,18] > 0.05) |
+                        
+                      ( (anova_table[,19] > -1.0 & anova_table[,19] < 1.0) |
+                         anova_table[,20] > 0.05) |
+                        
+                      ( (anova_table[,21] > -1.0 & anova_table[,21] < 1.0) |
+                         anova_table[,22] > 0.05) )
+
+# Create vector to store states for each gene
+state = vector(mode = "character", length = length(anova_table[,1]))
+state[upTHER] = "up_THER"
+state[downTHER] = "down_THER"
+state[nochangeTHER] = "nochange_THER"
+
+# Identify names of genes differentially expressed between TG and therapies
+genes_up_THER = c(rownames(anova_table)[upTHER])
+genes_down_THER = c(rownames(anova_table)[downTHER])
+
+deg_tg_ther = c(genes_up_THER, genes_down_THER)
+
+# Combine DEGs from TG and THER
+DEGs = c(deg_tg_ther, deg_wt_tg)
+
+# Data frame with all DEGs for clustering
+DEGsFrame = anova_table[rownames(anova_table) %in% DEGs, ]
+DEGsFrame = as.matrix(DEGsFrame)
+```
+
+## Hierarchical clustering
+
+```{r}
+#| label: fig-cluster
+#| fig-cap: "Clusters of differentially expressed genes"
+
+# k-means clustering
+# ------------------
+kmeans = kmeans(DEGsFrame[, c(1,3,5,7,9,11) ], centers = 6)
+ggplotly(fviz_cluster(kmeans, data = (DEGsFrame[, c(1,3,5,7,9,11)]), geom = "point", show.clust.cent = TRUE))
+```
+
+```{r}
+# Extract genes from clusters
+clusters = data.frame(kmeans$cluster)
+colnames(clusters) = ("ClusterNo")
+
+# Output data as table (group by cluster number)
+kable(clusters, col.names = "Cluster Number", caption = "Clusters and associated genes") |>
+        kable_styling(font_size = 14) |>
+        scroll_box(height = "400px")
+```
+
+```{r}
+# Extract clusters
+cluster1 = rownames(subset(clusters, ClusterNo == 1))
+cluster2 = rownames(subset(clusters, ClusterNo == 2))
+cluster3 = rownames(subset(clusters, ClusterNo == 3))
+cluster4 = rownames(subset(clusters, ClusterNo == 4))
+cluster5 = rownames(subset(clusters, ClusterNo == 5))
+cluster6 = rownames(subset(clusters, ClusterNo == 6))
+```
+
+```{r}
+#| label: fig-heatmap
+#| fig-cap: "Heatmap of differentially expressed genes after hierarchical clustering"
+
+# ---------------------Prepare data for heatmap-------------------------
+
+# Define custom function to perform hierarchical clustering with the Ward.D2 linkage method
+hclustfunc = function(x)
+  hclust(x, method = "ward.D2")
+
+# Define custom function to calculate pairwise Euclidean distances between data points
+distfunc = function(x)
+  dist(x, method = "euclidean")
+
+# Perform clustering on rows and columns 
+cl.row = hclustfunc(distfunc(DEGsFrame[, c(1,3,5,7,9,11)]))
+
+# Extract cluster assignments of rows
+gr.row = cutree(cl.row, k=6)
+
+# Apply a set of color palette
+colors = brewer.pal(5, "Set3")
+
+heatmap <- heatmap.2(
+          DEGsFrame[, c(1,3,5,7,9,11)],
+          col = bluered(100), # blue-red color palette
+          tracecol="black",
+          density.info = "none",
+          labCol = c("TG", "REM_P", "REM", "HUM", "ENB","CIM"),
+          scale="none", 
+          labRow="", 
+          vline = 0,
+          mar=c(6,2),
+          RowSideColors = colors[gr.row],
+          hclustfun = function(x) hclust(x, method = 'ward.D2')
+)
+```
+
+### Notes on Heatmap Interpretation
+
+**Rows**: Each row represents a gene and the genes are clustered hierarchically (dendrogram on the left). Genes with similar expression patterns are grouped together.
+
+**Columns**: They represent experimental conditions/ sample types.
+
+**Color Gradient (Color Key)**:
+
+-   **Red** represents upregulated genes (positive values).
+
+-   **Blue** represents downregulated genes (negative values).
+
+-   The scale ranges from -4 to +4, indicating the intensity of differential expression (e.g. mean change).
+
+**Clustering**:
+
+-   The dendrogram on the top shows how the conditions are related based on the gene expression patterns. Conditions that cluster closer together (e.g., REM and TG) are likely to have similar expression profiles.
+
+-   The dendrogram on the left shows how genes are grouped based on similarity in expression across the conditions.
+
++--------------------+---------------------------------+-------------------------------+
+| Aspect             | Hierarchical Clustering         | K-means Clustering            |
++====================+=================================+===============================+
+| Approach           | Builds hierarchy (Dendrogram)   | Partitions into flat clusters |
++--------------------+---------------------------------+-------------------------------+
+| Number of Clusters | Determined post-analysis        | Must be predefined            |
++--------------------+---------------------------------+-------------------------------+
+| Cluster Shape      | Can handle various shapes       | Assumes spherical clusters    |
++--------------------+---------------------------------+-------------------------------+
+| Distance Metric    | Multiple metrics                | Only Euclidean distance       |
+|                    |                                 |                               |
+|                    | (e.g. Euclidean, Manhattan)     |                               |
++--------------------+---------------------------------+-------------------------------+
+| Scalability        | Not scalable for large datasets | Efficient and scalable        |
++--------------------+---------------------------------+-------------------------------+
+| Visual Output      | Dendrogram                      | Cluster assignment            |
++--------------------+---------------------------------+-------------------------------+
+| Handling Outliers  | Sensitive to outliers           | Sensitive, but manageable     |
++--------------------+---------------------------------+-------------------------------+
+
+: Key Differences of Hierarchical vs K-means Clustering
+
+Performing **k-means clustering** followed by creating a **heatmap with hierarchical clustering** combines the strengths of both clustering methods to get a more insightful and comprehensive visualization of the data. This hybrid approach can be particularly useful when working with large and complex datasets, such as gene expression data. This combination leverages the strengths of both methods: **k-means** for global structure and **hierarchical clustering** for local, detailed exploration.
+
+## Functional Enrichment Analysis of Differentially Expressed Genes (DEGs)
+
+Once DEGs are identified, they need to be annotated to determine their biological functions, cellular localization, molecular interactions, and involvement in various biological pathways. This is often achieved by comparing DEGs to databases of known gene annotations, such as Gene Ontology (GO) or Kyoto Encyclopedia of Genes and Genomes (KEGG).
+
+Pathway analysis focuses on identifying interconnected networks of genes that collaborate to carry out specific biological functions or participate in common signaling pathways. This involves mapping DEGs onto existing biological pathways and identifying key regulatory nodes or hub genes within these pathways. Pathway analysis provides insights into the underlying molecular mechanisms driving the observed gene expression changes.
+
+The code below performs hierarchical clustering analysis on a gene expression dataset and then further analyzes the clusters to identify enriched biological terms using the databases: Gene Ontology (GO), with three Sub-Ontologies (Biological Process (BP), Cellular Component (CC), Molecular Function (MF)) transcription factors (TF), and Kyoto Encyclopedia of Genes and Genomes (KEGG) databases.
+
+```{r functional_enrich}
+# Get the cluster assignments
+mt <- as.hclust(heatmap$rowDendrogram)
+
+# Cut the tree into 8 clusters
+tgcluster <- cutree(mt, k = 8)
+tgdegnames <- rownames(DEGsFrame)
+
+# Keep unique cluster numbers
+cl <- as.numeric(names(table(tgcluster)))
+
+totalresults <- 0
+totalcols <- 0
+pcols<-c("firebrick4", "red", "dark orange", "gold","dark green", "dodgerblue", "blue", "magenta", "darkorchid4")
+
+# Iterating through clusters for functional enrichment 
+#  The gost() function queries the significant genes from each cluster against various biological databases
+for (i in c(6, 5, 4, 3, 2, 7, 1)) {
+  gobp <- gost(query = as.character(tgdegnames[which(tgcluster == cl[i])]), organism = "mmusculus", significant = T, sources = "GO:BP")$result
+  gomf <- gost(query = as.character(tgdegnames[which(tgcluster == cl[i])]), organism = "mmusculus", significant = T, sources = "GO:MF")$result
+  gocc <- gost(query = as.character(tgdegnames[which(tgcluster == cl[i])]), organism = "mmusculus", significant = T, sources = "GO:CC")$result
+  tf   <- gost(query = as.character(tgdegnames[which(tgcluster == cl[i])]), organism = "mmusculus", significant = T, sources = "TF")$result
+  kegg <- gost(query = as.character(tgdegnames[which(tgcluster == cl[i])]), organism = "mmusculus", significant = T, sources = "KEGG")$result
+  
+  # Combine results
+  results <- rbind(kegg, tf, gobp, gomf, gocc)
+  
+  # Filter the results based on different sources
+  tf  <- grep("TF:", results$term_id)
+  go  <- grep("GO:", results$term_id)
+  kegg<-grep("KEGG:", results$term_id)
+  
+  # Get enriched terms/pathways, their associated p-values, and other relevant information obtained from the enrichment analysis.
+  kegg<- results[kegg, ]
+  tf  <- results[tf, ]
+  go  <- results[go, ]
+
+  # Order the results based on p-values
+  kegg<- kegg[order(kegg$p_value), ]
+  go  <- go[order(go$p_value), ]
+  tf  <- tf[order(tf$p_value), ]
+  
+  # Split the term_id and term_name
+  ll <- strsplit(as.character(tf$term_name), ": ")
+  ll <- sapply(ll, "[[", 2)
+  ll <- strsplit(as.character(ll), ";")
+  tf$term_name <- sapply(ll, "[[", 1)
+  
+  # Remove duplicates
+  if (length(tf$term_id) > 0) {
+    uniqtf <- unique(tf$term_name)
+    tfout <- 0
+    for (ik in 1:length(uniqtf)) {
+      nn <- which(as.character(tf$term_name) == as.character(uniqtf[ik]))
+      tfn <- tf[nn, ]
+      inn <- which(tfn$p_value == min(tfn$p_value))
+      tfout <- rbind(tfout, head(tfn[inn, ], 1))
+    }
+    tf <- tfout[2:length(tfout[, 1]), ]
+  }
+  
+  results <- rbind(head(kegg, 10), head(go, 10), head(tf, 10))
+  totalresults <- rbind(totalresults, results)
+  n <- length(results$term_id)
+  totalcols <- c(totalcols, rep(pcols[i], n))
+}
+
+totalresults <- totalresults[2:length(totalresults[, 1]), ]
+totalcols <- totalcols[2:length(totalcols)]
+par(mar = c(5, 15, 1, 2))
+```
+
+```{r}
+#| label: fig-overfunc
+#| fig-cap: "Under-expressed clusters of differentially expressed genes after functional enrichment analysis"
+
+# Visualization of under-expressed clusters of DEGs
+barplot(
+  rev(-log10(totalresults$p_value[75:126])),
+  xlab = "-log10(p-value)",
+  ylab = "",
+  cex.main = 1.3,
+  cex.lab = 0.9,
+  cex.axis = 0.9,
+  main = "Under-Expressed Clusters",
+  col = rev(totalcols[75:126]),
+  horiz = T,
+  names = rev(totalresults$term_name[75:126]),
+  las = 1,
+  cex.names = 0.6
+)
+
+```
+
+```{r}
+# Custom layout / margins
+par(mar = c(5, 15, 1, 2))
+
+# Visualization of over-expressed clusters of DEGs
+barplot(
+  rev(-log10(totalresults$p_value[1:74])),
+  xlab = "-log10(p-value)",
+  ylab = "",
+  cex.main = 1.3,
+  cex.lab = 0.9,
+  cex.axis = 0.9,
+  main = "Over-Expressed Clusters",
+  col = rev(totalcols[1:74]),
+  horiz = T,
+  names = rev(totalresults$term_name[1:74]),
+  las = 1,
+  cex.names = 0.6
+)
+```

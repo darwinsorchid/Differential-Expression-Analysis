@@ -1,0 +1,22 @@
+.title {
+    color: #ffffff !important; /* Title text color */
+}
+
+body {
+    text-align: justify; /* Justify all text */
+}
+
+.code-tools-button {  
+    background-color: #6b86b5;  /* Code-tools button background color */  
+    color: #84c0cd; /* Code-tools button text color */   
+}
+
+.dropdown-menu {
+    background-color: #6b86b5;     /* Background color for code-tools dropdown menu */  
+    border: 1px solid #ccc;        /* Border for the dropdown */  
+}
+
+.dropdown-item:hover {  
+    background-color: #242e54 ;     /* Background for code-tool dropdown items on hover */  
+    color: #faf9f9;                   /* Text color when hovered */  
+} 
