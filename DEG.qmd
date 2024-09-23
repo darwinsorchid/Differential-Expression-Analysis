@@ -14,7 +14,7 @@ format:
     embed-resources: true
     code-fold: true
     code-tools:
-      source: https://github.com/darwinsorchid
+      source: https://github.com/darwinsorchid/Differential-Expression-Analysis
     css: custom.css
 
 editor: visual
@@ -308,9 +308,8 @@ Principal Component Analysis (PCA) is a statistical technique used to simplify c
 
 -   Choose the top $k$ eigenvectors (where $k$ is the number of dimensions you want to reduce your data to) and project the original data onto these eigenvectors. This transformation gives you the data represented in terms of the principal components, reducing the dimensionality from $n$ to $k$.
 
-```{=html}
 <!-- -->
-```
+
 -   The resulting $k$-dimensional space retains most of the variability in the original $n$-dimensional space.
 
 [**Projection of data**]{.underline}
@@ -961,12 +960,14 @@ for (i in c(6, 5, 4, 3, 2, 7, 1)) {
 
 totalresults <- totalresults[2:length(totalresults[, 1]), ]
 totalcols <- totalcols[2:length(totalcols)]
-par(mar = c(5, 15, 1, 2))
 ```
 
 ```{r}
 #| label: fig-overfunc
 #| fig-cap: "Under-expressed clusters of differentially expressed genes after functional enrichment analysis"
+
+# Custom layout/margins
+par(mar = c(5, 15, 1, 2))
 
 # Visualization of under-expressed clusters of DEGs
 barplot(
@@ -987,7 +988,7 @@ barplot(
 ```
 
 ```{r}
-# Custom layout / margins
+# Custom layout/margins
 par(mar = c(5, 15, 1, 2))
 
 # Visualization of over-expressed clusters of DEGs
