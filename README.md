@@ -46,6 +46,7 @@ Part of the project is an implementation of the same workflow using python libra
 ---
 
 ### - DEG.py:
+  To render the file with Streamlit, run `streamlit run DEG.py` in the command line.
   
   Pending python implementation of the differential expression analysis workflow [_with a Streamlit application potential*_] exploring the following python libraries:
   `streamlit`
