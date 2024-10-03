@@ -20,7 +20,7 @@ Part of the project is an implementation of the same workflow using python libra
   - Hierarchical Clustering
   - Functional Enrichment Analysis
 
-  Libraries:
+__Libraries Used:__
 
   `preprocessCore` 
   `umap` 
@@ -43,6 +43,38 @@ Part of the project is an implementation of the same workflow using python libra
   
   Rendered DEG.qmd file in HTML format.
   
+---
+
+### - DEG_machine_learning.ipynb:
+
+  A Jupyter notebook following along the last part of the workshop, where an attempt was made to use machine learning algorithms for treatment prediction, based on gene expression data, for research purposes.
+
+__Libraries Used:__
+
+- `pandas`
+- `numpy`
+- `collections.OrderedDict`
+- `sklearn.model_selection.train_test_split`
+- `sklearn.naive_bayes.GaussianNB`
+- `sklearn.neighbors.KNeighborsClassifier`
+- `sklearn.linear_model.LogisticRegression`
+- `sklearn.linear_model.LinearRegression, Ridge, Lasso, RidgeCV, LassoCV`
+- `sklearn.neural_network.MLPClassifier`
+- `sklearn.svm.SVC`
+- `sklearn.tree.DecisionTreeClassifier`
+- `sklearn.ensemble.RandomForestClassifier`
+- `sklearn.metrics.classification_report, f1_score, accuracy_score, confusion_matrix`
+- `random.shuffle`
+- `sklearn.preprocessing.StandardScaler`
+- `sklearn.decomposition.PCA`
+- `tqdm`
+- `time`
+- `hyperopt.fmin, tpe, hp`
+- `tensorflow`
+- `tensorflow.keras.models.Sequential`
+- `tensorflow.keras.layers.Input, Dense`
+- `tensorflow.keras.models.Model`
+
 ---
 
 ### - DEG.py:
